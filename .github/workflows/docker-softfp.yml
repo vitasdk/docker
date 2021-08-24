@@ -1,4 +1,4 @@
-name: CI-Docker-non-root
+name: CI-Docker-softfp
 
 on:
   push:
