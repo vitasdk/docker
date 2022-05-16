@@ -5,7 +5,7 @@ RUN apt update && \
         apt install -y software-properties-common && \
         apt update && \
         apt install -y build-essential libssl-dev cmake cmake-data git \
-                python curl rsync fakeroot texinfo texinfo libtool-bin \
+                python2 curl rsync fakeroot texinfo texinfo libtool-bin \
                 libarchive-tools autoconf sudo pkg-config sudo xutils-dev
 
 ADD scripts/download_sdk.sh /scripts/download_sdk.sh
