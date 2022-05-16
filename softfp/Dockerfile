@@ -61,7 +61,7 @@ FROM ubuntu:latest
 RUN apt update && \
     apt install -y software-properties-common && \
     apt update && \
-    apt install -y build-essential cmake cmake-data git python curl \
+    apt install -y build-essential cmake cmake-data git python2 curl \
         fakeroot libtool-bin libarchive-tools zip && \
     rm -rf /var/lib/apt/lists/*
 
