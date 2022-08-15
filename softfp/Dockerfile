@@ -5,7 +5,7 @@ RUN apt update && \
         apt install -y software-properties-common && \
         apt update && \
         apt install -y build-essential libssl-dev cmake cmake-data git \
-                python2 curl rsync fakeroot texinfo texinfo libtool-bin \
+                python3 python-is-python3 curl rsync fakeroot texinfo texinfo libtool-bin \
                 libarchive-tools autoconf sudo pkg-config sudo xutils-dev
 
 ADD scripts/download_sdk.sh /scripts/download_sdk.sh
@@ -61,7 +61,7 @@ FROM ubuntu:latest
 RUN apt update && \
     apt install -y software-properties-common && \
     apt update && \
-    apt install -y build-essential cmake cmake-data git python2 curl \
+    apt install -y build-essential cmake cmake-data git python3 python-is-python3 curl \
         fakeroot libtool-bin libarchive-tools zip && \
     rm -rf /var/lib/apt/lists/*
 
