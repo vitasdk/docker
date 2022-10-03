@@ -12,3 +12,4 @@ RUN git clone https://github.com/vitasdk/vdpm.git --depth=1 && \
 FROM vitasdk/buildscripts:latest  
 
 COPY --from=0 ${VITASDK} ${VITASDK}
+RUN apk add --no-cache bash make pkgconf
