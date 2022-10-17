@@ -11,7 +11,7 @@ RUN git clone https://github.com/vitasdk/vdpm.git --depth=1 && \
 # Second stage of Dockerfile
 FROM vitasdk/buildscripts:latest  
 
-RUN apk add --no-cache bash make pkgconf curl fakeroot libarchive-tools file xz &&\
+RUN apk add --no-cache bash make pkgconf curl fakeroot libarchive-tools file xz cmake &&\
     adduser -D user &&\
     chmod u+s /sbin/apk && \
     ln -s /sbin/apk /bin/apk
