@@ -11,10 +11,8 @@ RUN git clone https://github.com/vitasdk/vdpm.git --depth=1 && \
 # Second stage of Dockerfile
 FROM vitasdk/buildscripts:latest  
 
-RUN apk add --no-cache bash make pkgconf curl fakeroot libarchive-tools file xz cmake &&\
+RUN apk add --no-cache bash make pkgconf curl fakeroot libarchive-tools file xz cmake sudo &&\
     adduser -D user &&\
-    chmod u+s /sbin/apk && \
-    ln -s /sbin/apk /bin/apk
+    echo "export VITASDK=${VITASDK}" > /etc/profile.d/vitasdk.sh && \
+    echo 'export PATH=$PATH:$VITASDK/bin'  >> /etc/profile.d/vitasdk.sh
 COPY --from=0 --chown=user ${VITASDK} ${VITASDK}
-USER user
-WORKDIR $VITASDK/..
