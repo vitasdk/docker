@@ -13,7 +13,17 @@ on:
 
 jobs:
   build:
+    name: ${{ matrix.tags }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - context: .
+            tags: vitasdk/vitasdk:latest
+          - context: ./non-root
+            tags: vitasdk/vitasdk:non-root
+          - context: ./softfp
+            tags: vitasdk/vitasdk-softfp:latest
 
     steps:
     - uses: actions/checkout@v3
@@ -31,7 +41,10 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
       if: github.event_name != 'pull_request'
 
-    - uses: docker/build-push-action@v3
+    - uses: docker/build-push-action@v4
       with:
+        context: ${{ matrix.context }}
         push: ${{ github.event_name != 'pull_request' }}
-        tags: vitasdk/vitasdk:latest
+        tags: ${{ matrix.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
