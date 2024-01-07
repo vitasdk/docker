@@ -16,6 +16,7 @@ jobs:
     name: ${{ matrix.tags }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - context: .
