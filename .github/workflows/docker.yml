@@ -22,8 +22,6 @@ jobs:
             tags: vitasdk/vitasdk:latest
           - context: ./non-root
             tags: vitasdk/vitasdk:non-root
-          - context: ./softfp
-            tags: vitasdk/vitasdk-softfp:latest
 
     steps:
     - uses: actions/checkout@v3
