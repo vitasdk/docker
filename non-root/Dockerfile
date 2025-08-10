@@ -18,6 +18,7 @@ ENV HOME /home/$USER
 
 # install sudo as root
 RUN apk add --no-cache sudo
+RUN apk add --no-cache bash make pkgconf curl fakeroot libarchive-tools file xz cmake sudo git
 
 # add new user
 RUN adduser -D $USER \
