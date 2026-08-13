@@ -206,6 +206,9 @@ jobs:
   build:
     needs: plan
     if: needs.plan.outputs.build != '[]'
+    # Named explicitly: a matrix job is otherwise titled with every value in
+    # its entry, and the labels alone are three lines of digest.
+    name: build ${{ matrix.id }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -283,6 +286,7 @@ jobs:
   merge:
     needs: [plan, build]
     if: needs.plan.outputs.publishing == 'true'
+    name: merge ${{ matrix.channel }} ${{ matrix.variant }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
