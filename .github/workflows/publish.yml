@@ -273,7 +273,10 @@ jobs:
         if: needs.plan.outputs.publishing == 'true'
         run: |
           mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ steps.push.outputs.digest }}"
+          # The merge job puts the algorithm back when it names the images, and
+          # an artifact path cannot carry the colon this prefix brings.
+          digest='${{ steps.push.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
 
       - uses: actions/upload-artifact@v4
         if: needs.plan.outputs.publishing == 'true'
