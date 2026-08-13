@@ -52,14 +52,14 @@ RUN userdel --remove ubuntu 2>/dev/null || true; \
 FROM host-tools AS core
 
 ARG VITASDK_CHANNEL
-ARG VDPM_RELEASE=v0.1.0-rc1
+ARG VDPM_RELEASE=v0.1.0
 
 ENV VITASDK=/usr/local/vitasdk
 ENV PATH=$VITASDK/bin:$PATH
 
 # The image installs what a user installs: the bootstrap resolves the host
-# archive from the signed channel manifest and verifies it. Nothing here knows
-# about build artefacts or release tags.
+# archive from the signed channel manifest, verifies it, and selects the series
+# it resolved. Nothing here knows about build artefacts or release tags.
 #
 # The ownership fix belongs to this RUN and not to a later one: a recursive
 # chown in its own layer rewrites the metadata of every file and duplicates the
@@ -75,7 +75,6 @@ RUN set -eu; \
     grep ' bootstrap-vitasdk\.sh$' SHA256SUMS | sha256sum -c -; \
     chmod +x bootstrap-vitasdk.sh; \
     VITASDK_CHANNEL="$VITASDK_CHANNEL" ./bootstrap-vitasdk.sh --install-dir "$VITASDK"; \
-    vdpm refresh "$VITASDK_CHANNEL"; \
     rm -f bootstrap-vitasdk.sh SHA256SUMS; \
     chown -R vitasdk:0 "$VITASDK"; \
     chmod -R g+rwX "$VITASDK"

@@ -45,6 +45,37 @@ Every tag is a multi-architecture manifest covering `linux/amd64` and
 `nightly` are not**: they are produced daily by definition and may be pruned
 later. Pin a series if you need the pin to survive.
 
+## What changed, if you were already using these images
+
+Two tag names change meaning the first time this pipeline publishes.
+
+**`latest` and `non-root` used to be a nightly.** They were rebuilt every
+night from the tip of the toolchain, so `docker run vitasdk/vitasdk` handed
+you whatever had been built that morning. They now follow the newest
+supported release series, which is what most people wanted from them and
+what `latest` means for the images they already use.
+
+```console
+$ docker run vitasdk/vitasdk:nightly            # the previous behaviour
+$ docker run vitasdk/vitasdk:nightly-non-root
+```
+
+Nothing about the tag names disappears: `:non-root` still exists and still
+means the same variant, only of a series rather than of the nightly. Pin a
+series -- or a series and a date -- if you want the ground to stop moving
+altogether.
+
+Two other things worth knowing, both consequences of the images being built
+from the published channel rather than from a toolchain compiled in place:
+
+- **The base is Ubuntu 24.04, not Alpine.** The SDK published for Linux is
+  built against glibc, so an Alpine image could only ever have carried a
+  toolchain that does not run. If you build musl binaries on top of these
+  images, that is the change that affects you.
+- **`arm64` is native.** Both architectures are built on their own hardware
+  and published in one manifest, so Apple Silicon and ARM runners stop
+  emulating.
+
 ## Variants
 
 The plain tag runs as root, which is what a derived `RUN apt-get install ...`

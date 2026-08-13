@@ -38,7 +38,7 @@ env:
   BASE_IMAGE: ubuntu:24.04
   # Pinned: this is where the bootstrap script and the public key come from,
   # and a moving reference would make a dated tag unreproducible.
-  VDPM_RELEASE: v0.1.0-rc1
+  VDPM_RELEASE: v0.1.0
   CHANNEL_BASE_URL: https://vitasdk.org/channels
 
 jobs:
