@@ -1,0 +1,363 @@
+name: Publish images
+
+# Two triggers with different jobs to do.
+#
+# The dispatch is the one that matters: it fires when autobuilds closes a
+# channel, which is when "the series today" changes, and it is what keeps the
+# images following the packages rather than the core.
+#
+# The cron is for the base image -- the reason Canonical rebuilds ubuntu:24.04
+# every month without Ubuntu changing -- and as a net. It is deliberately not
+# load-bearing: if GitHub disables it after 60 days of repository inactivity,
+# as it did with the workflow this one replaces, the images still follow every
+# channel publication and only the CVE refresh stops.
+#
+# On a branch that is not the default one, only push and pull_request fire.
+# That is what makes this testable before the cutover: it builds and runs the
+# smoke test, and publishes nothing.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  repository_dispatch:
+    types: [channel_published]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Build this series only (empty builds every live one)
+        required: false
+      force:
+        description: Publish even if neither the channel nor the base moved
+        type: boolean
+        default: false
+  pull_request:
+  push:
+    branches: [next]
+
+env:
+  REGISTRY_IMAGE: vitasdk/vitasdk
+  BASE_IMAGE: ubuntu:24.04
+  # Pinned: this is where the bootstrap script and the public key come from,
+  # and a moving reference would make a dated tag unreproducible.
+  VDPM_RELEASE: v0.1.0-rc1
+  CHANNEL_BASE_URL: https://vitasdk.org/channels
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      merge: ${{ steps.plan.outputs.merge }}
+      plan: ${{ steps.plan.outputs.plan }}
+      publishing: ${{ steps.mode.outputs.publishing }}
+      base_digest: ${{ steps.base.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide whether this run publishes
+        id: mode
+        shell: bash
+        run: |
+          case '${{ github.event_name }}' in
+            schedule|repository_dispatch|workflow_dispatch) publishing=true ;;
+            *) publishing=false ;;
+          esac
+          echo "publishing=$publishing" >> "$GITHUB_OUTPUT"
+
+      # Resolved once and passed into the build as a digest. Deciding on one
+      # base and then building `FROM ubuntu:24.04` by tag would record a digest
+      # the image does not actually contain.
+      - name: Resolve the base image digest
+        id: base
+        shell: bash
+        run: |
+          # `--format` with .Manifest.Digest is quietly ignored by some buildx
+          # versions, which then prints the whole human-readable inspect. The
+          # digest of the raw index bytes is the digest, and always is.
+          digest=sha256:$(docker buildx imagetools inspect --raw "$BASE_IMAGE" \
+            | sha256sum | cut -d' ' -f1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice::base $BASE_IMAGE is $digest"
+
+      # The index is what says which series exist and in what state, and it is
+      # signed with the same key the client verifies. Taking it unverified
+      # would leave the one input of the whole pipeline that nobody checks.
+      - name: Download and verify the channel index
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p channels
+          curl -fsSL -o channels/index.json "$CHANNEL_BASE_URL/index.json"
+          curl -fsSL -o channels/index.json.sig "$CHANNEL_BASE_URL/index.json.sig"
+          curl -fsSL -o channels/key.pem \
+            "https://raw.githubusercontent.com/vitasdk/vdpm/$VDPM_RELEASE/share/vdpm/channel-public-key.pem"
+          openssl pkeyutl -verify -rawin -pubin -inkey channels/key.pem \
+            -sigfile channels/index.json.sig -in channels/index.json
+          rm -f channels/index.json.sig channels/key.pem
+
+      - name: Download and verify every live series manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o key.pem \
+            "https://raw.githubusercontent.com/vitasdk/vdpm/$VDPM_RELEASE/share/vdpm/channel-public-key.pem"
+          live=$(python3 -c '
+          import json
+          index = json.load(open("channels/index.json"))
+          for name, entry in index["channels"].items():
+              if entry.get("status") in ("supported", "development"):
+                  print(name)
+          ')
+          for channel in $live; do
+            curl -fsSL -o "channels/$channel.json" "$CHANNEL_BASE_URL/$channel.json"
+            curl -fsSL -o "$channel.sig" "$CHANNEL_BASE_URL/$channel.json.sig"
+            openssl pkeyutl -verify -rawin -pubin -inkey key.pem \
+              -sigfile "$channel.sig" -in "channels/$channel.json"
+            rm -f "$channel.sig"
+          done
+          rm -f key.pem
+
+      # What the registry already holds: the labels of each moving tag, which
+      # carry the identity of what was published, and the tags that already
+      # exist for today, so a second run does not overwrite a dated tag.
+      - name: Ask the registry what it published
+        shell: bash
+        run: |
+          set -uo pipefail
+          date=$(date -u +%Y%m%d)
+          echo "DATE=$date" >> "$GITHUB_ENV"
+          python3 - <<'PY' > published.json
+          import json, subprocess
+          index = json.load(open("channels/index.json"))
+          published = {}
+          for name, entry in index["channels"].items():
+              if entry.get("status") not in ("supported", "development"):
+                  continue
+              image = f"vitasdk/vitasdk:{name}"
+              try:
+                  raw = subprocess.run(
+                      ["docker", "buildx", "imagetools", "inspect", image,
+                       "--format", "{{json .Image}}"],
+                      capture_output=True, text=True, timeout=120, check=True).stdout
+              except Exception:
+                  continue
+              try:
+                  parsed = json.loads(raw)
+              except json.JSONDecodeError:
+                  continue
+              # Single platform answers with a config, multi platform with a
+              # map keyed by platform. The labels are the same either way.
+              config = parsed if "config" in parsed else next(iter(parsed.values()), {})
+              labels = (config.get("config") or {}).get("Labels") or {}
+              published[name] = labels
+          json.dump(published, open("published.json", "w"))
+          PY
+          curl -fsSL "https://hub.docker.com/v2/repositories/$REGISTRY_IMAGE/tags/?page_size=100&name=$date" \
+            | python3 -c 'import json,sys
+          try:
+              print("\n".join(r["name"] for r in json.load(sys.stdin).get("results", [])))
+          except Exception:
+              pass' > existing-tags.txt || true
+          echo "tags ya publicados con fecha $date: $(wc -l < existing-tags.txt)"
+
+      - name: Plan
+        id: plan
+        shell: bash
+        env:
+          REQUESTED_CHANNEL: ${{ github.event.inputs.channel || github.event.client_payload.channel }}
+        run: |
+          set -euo pipefail
+          python3 scripts/plan.py \
+            --index channels/index.json \
+            --manifest-dir channels \
+            --published published.json \
+            --existing-tags existing-tags.txt \
+            --base-digest '${{ steps.base.outputs.digest }}' \
+            --date "$DATE" \
+            --repository "$REGISTRY_IMAGE" \
+            --channel "$REQUESTED_CHANNEL" \
+            ${{ github.event.inputs.force == 'true' && '--force' || '' }} \
+            ${{ steps.mode.outputs.publishing == 'false' && '--force --test-run' || '' }} \
+            > plan.json
+
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          plan = json.load(open("plan.json"))
+          runners = {"amd64": "ubuntu-24.04", "arm64": "ubuntu-24.04-arm"}
+          build = [
+              {**item, "platform": arch, "runner": runner,
+               "id": f"{item['channel']}-{item['variant']}-{arch}"}
+              for item in plan["build"]
+              for arch, runner in runners.items()
+          ]
+          merge = [{"channel": i["channel"], "variant": i["variant"]} for i in plan["build"]]
+          print("build=" + json.dumps(build))
+          print("merge=" + json.dumps(merge))
+          print("plan=" + json.dumps(plan))
+          PY
+
+          for skipped in $(python3 -c '
+          import json
+          for item in json.load(open("plan.json"))["skip"]:
+              print(item["channel"])
+          '); do
+            echo "::notice::$skipped unchanged, not republished"
+          done
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build != '[]'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.build) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built into the local daemon first so the smoke test runs against the
+      # very image that is about to be published, before it is published.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.variant }}
+          platforms: linux/${{ matrix.platform }}
+          load: true
+          tags: vitasdk-candidate:${{ matrix.id }}
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
+            VITASDK_CHANNEL=${{ matrix.channel }}
+            VDPM_RELEASE=${{ env.VDPM_RELEASE }}
+          labels: ${{ matrix.label_text }}
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+      - name: Smoke test
+        run: |
+          tests/smoke.sh vitasdk-candidate:${{ matrix.id }}
+          # The arbitrary UID a cluster hands out, which is the case that
+          # breaks first when ownership inside the SDK is wrong.
+          tests/smoke.sh vitasdk-candidate:${{ matrix.id }} 4242:0
+
+      - name: Login to DockerHub
+        if: needs.plan.outputs.publishing == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Pushed by digest and named later, so a failure on one architecture
+      # never leaves a tag pointing at half a manifest.
+      - name: Push by digest
+        if: needs.plan.outputs.publishing == 'true'
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.variant }}
+          platforms: linux/${{ matrix.platform }}
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
+            VITASDK_CHANNEL=${{ matrix.channel }}
+            VDPM_RELEASE=${{ env.VDPM_RELEASE }}
+          labels: ${{ matrix.label_text }}
+          cache-from: type=gha,scope=${{ matrix.id }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        if: needs.plan.outputs.publishing == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ steps.push.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        if: needs.plan.outputs.publishing == 'true'
+        with:
+          name: digest-${{ matrix.id }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [plan, build]
+    if: needs.plan.outputs.publishing == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.merge) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-${{ matrix.channel }}-${{ matrix.variant }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # One place resolves the names for this series and variant, so the
+      # non-root tags cannot end up naming a different one.
+      - name: Resolve the tags of this variant
+        id: names
+        shell: bash
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+        run: |
+          python3 - '${{ matrix.channel }}' '${{ matrix.variant }}' <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+          channel, variant = sys.argv[1], sys.argv[2]
+          item = next(i for i in json.loads(os.environ["PLAN"])["build"]
+                      if i["channel"] == channel and i["variant"] == variant)
+          print("tag_args=" + " ".join("-t " + tag for tag in item["tags"]))
+          print("first=" + item["tags"][0])
+          print("non_root=" + ",".join(item["non_root_tags"]))
+          PY
+
+      - name: Create the manifest list
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/digests
+          docker buildx imagetools create ${{ steps.names.outputs.tag_args }} \
+            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+          digest=sha256:$(docker buildx imagetools inspect --raw \
+            '${{ steps.names.outputs.first }}' | sha256sum | cut -d' ' -f1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # No RUN instruction executes here, so both architectures are produced
+      # from one job without emulation. It costs no new bytes in the registry:
+      # the layers are the ones just pushed and only the config differs. It
+      # layers on the digest, never on a tag -- layering on a tag is how the
+      # previous pipeline published a non-root image with a two-month-old SDK.
+      - name: Build and push the non-root variant
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: non-root/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY_IMAGE }}@${{ steps.manifest.outputs.digest }}
+          tags: ${{ steps.names.outputs.non_root }}
+
+      - name: Say what was published
+        shell: bash
+        run: |
+          echo "::notice::${{ steps.names.outputs.first }} -> ${{ steps.manifest.outputs.digest }}"
+          docker buildx imagetools inspect --raw \
+            "${{ env.REGISTRY_IMAGE }}@${{ steps.manifest.outputs.digest }}" \
+            | python3 -c 'import json,sys
+          index = json.load(sys.stdin)
+          for manifest in index.get("manifests", []):
+              platform = manifest.get("platform", {})
+              print(platform.get("os"), platform.get("architecture"))'

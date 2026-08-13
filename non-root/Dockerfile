@@ -1,28 +1,18 @@
-FROM vitasdk/buildscripts:latest
+# syntax=docker/dockerfile:1
 
-RUN apk update 
+# The non-root variant is not a second image. It is the published one with USER
+# changed, so it reuses its layers -- no bytes are added to the registry -- and
+# it cannot drift from the image it names.
+#
+# BASE_IMAGE has to be a digest rather than a tag. Layering on a tag is how the
+# previous pipeline came to publish a non-root image carrying an SDK two months
+# older than the one it claimed.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
 
-RUN apk add git curl bash
+# Everything the user needs is already theirs: the SDK is owned by vitasdk with
+# group 0 and g+rwX, so `vdpm install` works here without sudo and without a
+# recursive chown of its own.
+USER vitasdk
 
-RUN git clone https://github.com/vitasdk/vdpm.git --depth=1 && \
-    cd vdpm/ && chmod +x ./*.sh && \
-    ./install-all.sh && cd .. && rm -fr vdpm/
-
-# Second stage of Dockerfile
-FROM vitasdk/buildscripts:latest  
-
-COPY --from=0 ${VITASDK} ${VITASDK}
-
-ARG USER=vitasdk
-ENV HOME /home/$USER
-
-# install sudo as root
-RUN apk add --no-cache sudo
-
-# add new user
-RUN adduser -D $USER \
-        && echo "$USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$USER \
-        && chmod 0440 /etc/sudoers.d/$USER
-
-USER $USER
-WORKDIR $HOME
+LABEL org.vitasdk.user="vitasdk"
