@@ -52,7 +52,7 @@ RUN userdel --remove ubuntu 2>/dev/null || true; \
 FROM host-tools AS core
 
 ARG VITASDK_CHANNEL
-ARG VDPM_RELEASE=v0.1.0
+ARG VDPM_RELEASE=v0.1.1
 
 ENV VITASDK=/usr/local/vitasdk
 ENV PATH=$VITASDK/bin:$PATH
