@@ -31,7 +31,7 @@ on:
         default: false
   pull_request:
   push:
-    branches: [master, next]
+    branches: [master]
 
 env:
   REGISTRY_IMAGE: vitasdk/vitasdk
