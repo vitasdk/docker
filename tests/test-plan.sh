@@ -137,6 +137,37 @@ check "las etiquetas llevan la release exacta del core" \
 	"sdk-core-2026.08.0" \
 	"$(query "[b['labels']['org.vitasdk.core.release'] for b in p['build'] if b['channel']=='2026.08'][0]" <<<"$out")"
 
+# A softfp channel builds under its own repository, its tag drops the
+# world's channel suffix, and -- with no softfp series supported yet -- it
+# inherits that repository's `latest` while the default world's `latest`
+# stays exactly where it was.
+d=$work/softfp; fixture "$d"
+cat > "$d/nightly-softfp.json" <<-'EOF'
+	{"channel": "nightly-softfp", "world": "vita_softfp", "sequence": 7,
+	 "core": {"release": "sdk-vita_softfp-snapshot-20260828.667.1"},
+	 "packages": {"release": "packages-snapshot-20260829.39.1"}}
+EOF
+python3 - "$d/index.json" <<-'EOF'
+	import json, sys
+	path = sys.argv[1]
+	index = json.load(open(path))
+	index["channels"]["nightly-softfp"] = {"status": "development"}
+	json.dump(index, open(path, "w"))
+EOF
+out=$(run "$d")
+check "softfp construye bajo su propio repositorio" \
+	"True" \
+	"$(query "'vitasdk/vitasdk-softfp:nightly' in [t for b in p['build'] if b['channel']=='nightly-softfp' and b['variant']=='full' for t in b['tags']]" <<<"$out")"
+check "el tag softfp no lleva el sufijo del mundo" \
+	"False" \
+	"$(query "any('softfp' in t.split(':')[1] for b in p['build'] if b['channel']=='nightly-softfp' for t in b['tags'])" <<<"$out")"
+check "sin corte softfp, latest de ese repo cae al development" \
+	"True" \
+	"$(query "'vitasdk/vitasdk-softfp:latest' in [t for b in p['build'] if b['channel']=='nightly-softfp' and b['variant']=='full' for t in b['tags']]" <<<"$out")"
+check "el mundo por defecto no se entera" \
+	"['2026.08']" \
+	"$(query "sorted({b['channel'] for b in p['build'] if 'vitasdk/vitasdk:latest' in b['tags']})" <<<"$out")"
+
 if (( failures )); then
 	printf '\n%d comprobaciones fallidas\n' "$failures" >&2
 	exit 1

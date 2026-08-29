@@ -20,6 +20,8 @@ import json
 import pathlib
 import sys
 
+from worlds import WORLDS, resolve
+
 # status values in the index that mean "still built"
 LIVE = ("supported", "development")
 
@@ -39,18 +41,35 @@ def series_key(name):
         return (1, name)
 
 
-def newest_supported(index):
-    supported = [
-        name
-        for name, entry in index["channels"].items()
-        if entry.get("status") == "supported"
-    ]
-    if not supported:
-        # `latest` keeps pointing wherever it points. Moving it to a
-        # development series because no series is supported would hand the
-        # nightly to everyone who typed `docker run vitasdk/vitasdk`.
-        return None
-    return sorted(supported, key=series_key)[0]
+def channel_world(name, manifests):
+    return json.loads(manifests[name]).get("world", "vita")
+
+
+def alias_channels(index, manifests):
+    """The channel of each world, if any, that gets the bare `latest`/`non-root`
+    aliases.
+
+    Prefers that world's newest supported series. A non-default world with
+    none yet -- softfp, pre-cutover -- falls back to its newest development
+    channel: anyone pulling that repository's bare tag already knows the
+    world it names is experimental. The default world never falls back:
+    moving `latest` to a development series because no series is supported
+    would hand the nightly to everyone who typed `docker run vitasdk/vitasdk`.
+    """
+    def channels_with(status, world):
+        return [
+            name for name, entry in index["channels"].items()
+            if entry.get("status") == status and name in manifests
+            and channel_world(name, manifests) == world
+        ]
+
+    result = {}
+    for world in WORLDS:
+        candidates = channels_with("supported", world)
+        if not candidates and world != "vita":
+            candidates = channels_with("development", world)
+        result[world] = sorted(candidates, key=series_key)[0] if candidates else None
+    return result
 
 
 def dated(base, date, existing):
@@ -68,9 +87,9 @@ def dated(base, date, existing):
     return candidate
 
 
-def tags_for(repository, channel, variant, date, existing, alias):
+def tags_for(repository, base, variant, date, existing, alias):
     suffix = VARIANTS[variant]
-    moving = f"{channel}{suffix}"
+    moving = f"{base}{suffix}"
     root = [moving, dated(moving, date, existing)]
     non_root = [f"{moving}-non-root", dated(f"{moving}-non-root", date, existing)]
     if alias:
@@ -84,9 +103,9 @@ def tags_for(repository, channel, variant, date, existing, alias):
     )
 
 
-def plan(index, manifests, published, base_digest, date, repository, existing,
+def plan(index, manifests, published, base_digest, date, existing,
          force, only, test_run=False):
-    alias_channel = newest_supported(index)
+    aliases = alias_channels(index, manifests)
     build, skip = [], []
 
     for channel, entry in sorted(index["channels"].items()):
@@ -94,17 +113,22 @@ def plan(index, manifests, published, base_digest, date, repository, existing,
             continue
         if only and channel != only:
             continue
-        # A run that publishes nothing exists to prove the build still works,
-        # and it proves that on the series most people are using. Building
-        # every live series on every push would cost eight package installs to
-        # learn one thing.
-        if test_run and channel != (alias_channel or channel):
-            continue
         if channel not in manifests:
             raise SystemExit(f"plan: no manifest downloaded for {channel}")
 
         raw = manifests[channel]
         manifest = json.loads(raw)
+        world = manifest.get("world", "vita")
+        repository, base = resolve(channel, world)
+        alias_channel = aliases.get(world)
+
+        # A run that publishes nothing exists to prove the build still works,
+        # on the series most people are using for that world. Building every
+        # live series on every push would cost eight package installs to
+        # learn one thing.
+        if test_run and channel != (alias_channel or channel):
+            continue
+
         identity = hashlib.sha256(raw).hexdigest()
 
         was = published.get(channel, {})
@@ -128,13 +152,15 @@ def plan(index, manifests, published, base_digest, date, repository, existing,
             "org.vitasdk.packages.release": manifest.get("packages", {}).get("release", ""),
         }
 
+        repository_existing = existing.get(repository, set())
         for variant in VARIANTS:
             root_tags, non_root_tags = tags_for(
-                repository, channel, variant, date, existing,
+                repository, base, variant, date, repository_existing,
                 alias=channel == alias_channel,
             )
             build.append({
                 "channel": channel,
+                "repository": repository,
                 "variant": variant,
                 "tags": root_tags,
                 "non_root_tags": non_root_tags,
@@ -143,7 +169,7 @@ def plan(index, manifests, published, base_digest, date, repository, existing,
                 "label_text": "\n".join(f"{k}={v}" for k, v in sorted(labels.items())),
             })
 
-    return {"build": build, "skip": skip, "alias": alias_channel}
+    return {"build": build, "skip": skip, "alias": aliases}
 
 
 def main():
@@ -153,14 +179,13 @@ def main():
     parser.add_argument("--published", required=True, type=pathlib.Path,
                         help="JSON mapping channel to the labels of its published image")
     parser.add_argument("--existing-tags", type=pathlib.Path,
-                        help="file with one published tag per line")
+                        help="file with one 'repository:tag' per line")
     parser.add_argument("--base-digest", required=True)
     parser.add_argument("--date", required=True, help="UTC, YYYYMMDD")
-    parser.add_argument("--repository", default="vitasdk/vitasdk")
     parser.add_argument("--channel", default="", help="plan this series only")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--test-run", action="store_true",
-                        help="build only the newest supported series")
+                        help="build only the newest supported series, per world")
     arguments = parser.parse_args()
 
     index = json.loads(arguments.index.read_text())
@@ -169,16 +194,16 @@ def main():
         for path in arguments.manifest_dir.glob("*.json")
         if path.stem != "index"
     }
-    # Accepted either as bare tags or as `repository:tag`, because the registry
-    # answers in one form and the plan reasons in the other.
-    existing = set()
+    # One 'repository:tag' per line, split on the last colon: a repository
+    # name never contains one, so the rightmost is always the tag boundary.
+    existing = {}
     if arguments.existing_tags and arguments.existing_tags.exists():
         for line in arguments.existing_tags.read_text().splitlines():
             line = line.strip()
             if not line:
                 continue
-            prefix = arguments.repository + ":"
-            existing.add(line[len(prefix):] if line.startswith(prefix) else line)
+            repository, _, tag = line.rpartition(":")
+            existing.setdefault(repository, set()).add(tag)
 
     result = plan(
         index=index,
@@ -186,7 +211,6 @@ def main():
         published=json.loads(arguments.published.read_text()),
         base_digest=arguments.base_digest,
         date=arguments.date,
-        repository=arguments.repository,
         existing=existing,
         force=arguments.force,
         only=arguments.channel,

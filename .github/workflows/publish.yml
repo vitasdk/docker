@@ -34,7 +34,6 @@ on:
     branches: [master]
 
 env:
-  REGISTRY_IMAGE: vitasdk/vitasdk
   BASE_IMAGE: ubuntu:24.04
   CHANNEL_BASE_URL: https://vitasdk.org/channels
 
@@ -136,13 +135,17 @@ jobs:
           date=$(date -u +%Y%m%d)
           echo "DATE=$date" >> "$GITHUB_ENV"
           python3 - <<'PY' > published.json
-          import json, subprocess
+          import json, subprocess, sys
+          sys.path.insert(0, "scripts")
+          from worlds import resolve
           index = json.load(open("channels/index.json"))
           published = {}
           for name, entry in index["channels"].items():
               if entry.get("status") not in ("supported", "development"):
                   continue
-              image = f"vitasdk/vitasdk:{name}"
+              manifest = json.load(open(f"channels/{name}.json"))
+              repository, base = resolve(name, manifest.get("world", "vita"))
+              image = f"{repository}:{base}"
               try:
                   raw = subprocess.run(
                       ["docker", "buildx", "imagetools", "inspect", image,
@@ -161,12 +164,23 @@ jobs:
               published[name] = labels
           json.dump(published, open("published.json", "w"))
           PY
-          curl -fsSL "https://hub.docker.com/v2/repositories/$REGISTRY_IMAGE/tags/?page_size=100&name=$date" \
-            | python3 -c 'import json,sys
+
+          : > existing-tags.txt
+          for repository in $(python3 -c '
+          import sys
+          sys.path.insert(0, "scripts")
+          from worlds import WORLDS
+          print("\n".join(w["repository"] for w in WORLDS.values()))
+          '); do
+            curl -fsSL "https://hub.docker.com/v2/repositories/$repository/tags/?page_size=100&name=$date" \
+              | python3 -c 'import json,sys
+          repository = sys.argv[1]
           try:
-              print("\n".join(r["name"] for r in json.load(sys.stdin).get("results", [])))
+              for r in json.load(sys.stdin).get("results", []):
+                  print(repository + ":" + r["name"])
           except Exception:
-              pass' > existing-tags.txt || true
+              pass' "$repository" >> existing-tags.txt || true
+          done
           echo "tags ya publicados con fecha $date: $(wc -l < existing-tags.txt)"
 
       - name: Plan
@@ -183,7 +197,6 @@ jobs:
             --existing-tags existing-tags.txt \
             --base-digest '${{ steps.base.outputs.digest }}' \
             --date "$DATE" \
-            --repository "$REGISTRY_IMAGE" \
             --channel "$REQUESTED_CHANNEL" \
             ${{ github.event.inputs.force == 'true' && '--force' || '' }} \
             ${{ steps.mode.outputs.publishing == 'false' && '--force --test-run' || '' }} \
@@ -275,7 +288,7 @@ jobs:
             VITASDK_CHANNEL=${{ matrix.channel }}
           labels: ${{ matrix.label_text }}
           cache-from: type=gha,scope=${{ matrix.id }}
-          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ matrix.repository }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         if: needs.plan.outputs.publishing == 'true'
@@ -335,6 +348,7 @@ jobs:
           print("tag_args=" + " ".join("-t " + tag for tag in item["tags"]))
           print("first=" + item["tags"][0])
           print("non_root=" + ",".join(item["non_root_tags"]))
+          print("repository=" + item["repository"])
           PY
 
       - name: Create the manifest list
@@ -344,7 +358,7 @@ jobs:
           set -euo pipefail
           cd /tmp/digests
           docker buildx imagetools create ${{ steps.names.outputs.tag_args }} \
-            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+            $(printf '${{ steps.names.outputs.repository }}@sha256:%s ' *)
           digest=sha256:$(docker buildx imagetools inspect --raw \
             '${{ steps.names.outputs.first }}' | sha256sum | cut -d' ' -f1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -362,7 +376,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            BASE_IMAGE=${{ env.REGISTRY_IMAGE }}@${{ steps.manifest.outputs.digest }}
+            BASE_IMAGE=${{ steps.names.outputs.repository }}@${{ steps.manifest.outputs.digest }}
           tags: ${{ steps.names.outputs.non_root }}
 
       - name: Say what was published
@@ -370,7 +384,7 @@ jobs:
         run: |
           echo "::notice::${{ steps.names.outputs.first }} -> ${{ steps.manifest.outputs.digest }}"
           docker buildx imagetools inspect --raw \
-            "${{ env.REGISTRY_IMAGE }}@${{ steps.manifest.outputs.digest }}" \
+            "${{ steps.names.outputs.repository }}@${{ steps.manifest.outputs.digest }}" \
             | python3 -c 'import json,sys
           index = json.load(sys.stdin)
           for manifest in index.get("manifests", []):
