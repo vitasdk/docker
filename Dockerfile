@@ -149,11 +149,11 @@ USER vitasdk
 ARG EXCLUDED_PACKAGES="vita-libdl curl-mbedtls"
 
 RUN set -eu; \
-    packages=$(vdpm search . | sed -n 's|^vita/\([^ ]*\).*|\1|p'); \
+    packages=$(vdpm search . | sed -n 's|^[^/ ]*/\([^ ]*\).*|\1|p'); \
     for excluded in $EXCLUDED_PACKAGES; do \
         packages=$(printf '%s\n' $packages | grep -vx "$excluded"); \
     done; \
-    [ -n "$packages" ] || { echo "the [vita] repository is empty" >&2; exit 1; }; \
+    [ -n "$packages" ] || { echo "the channel's repository is empty" >&2; exit 1; }; \
     VDPM_NONINTERACTIVE=1 vdpm install $packages; \
     vdpm files $packages | awk 'NF == 2 { print $2 }' | xargs -r chmod g+rwX; \
     rm -rf "$VITASDK/var/cache/pacman/pkg"/*
