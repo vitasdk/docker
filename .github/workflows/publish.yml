@@ -36,9 +36,6 @@ on:
 env:
   REGISTRY_IMAGE: vitasdk/vitasdk
   BASE_IMAGE: ubuntu:24.04
-  # Pinned: this is where the bootstrap script and the public key come from,
-  # and a moving reference would make a dated tag unreproducible.
-  VDPM_RELEASE: v0.1.1
   CHANNEL_BASE_URL: https://vitasdk.org/channels
 
 jobs:
@@ -77,6 +74,19 @@ jobs:
             | sha256sum | cut -d' ' -f1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "::notice::base $BASE_IMAGE is $digest"
+
+      # The public key needs an actual tag; resolved from the redirect, not
+      # the API, to skip its anonymous rate limit.
+      - name: Resolve the vdpm release
+        id: vdpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            https://github.com/vitasdk/vdpm/releases/latest)
+          release=${tag_url##*/}
+          echo "VDPM_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "::notice::vdpm $release"
 
       # The index is what says which series exist and in what state, and it is
       # signed with the same key the client verifies. Taking it unverified
@@ -232,7 +242,6 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
             VITASDK_CHANNEL=${{ matrix.channel }}
-            VDPM_RELEASE=${{ env.VDPM_RELEASE }}
           labels: ${{ matrix.label_text }}
           cache-from: type=gha,scope=${{ matrix.id }}
           cache-to: type=gha,mode=max,scope=${{ matrix.id }}
@@ -264,7 +273,6 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
             VITASDK_CHANNEL=${{ matrix.channel }}
-            VDPM_RELEASE=${{ env.VDPM_RELEASE }}
           labels: ${{ matrix.label_text }}
           cache-from: type=gha,scope=${{ matrix.id }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true

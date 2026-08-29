@@ -52,7 +52,6 @@ RUN userdel --remove ubuntu 2>/dev/null || true; \
 FROM host-tools AS core
 
 ARG VITASDK_CHANNEL
-ARG VDPM_RELEASE=v0.1.1
 
 ENV VITASDK=/usr/local/vitasdk
 ENV PATH=$VITASDK/bin:$PATH
@@ -60,6 +59,8 @@ ENV PATH=$VITASDK/bin:$PATH
 # The image installs what a user installs: the bootstrap resolves the host
 # archive from the signed channel manifest, verifies it, and selects the series
 # it resolved. Nothing here knows about build artefacts or release tags.
+#
+# Not pinned: a pin is what rejected the first softfp manifest.
 #
 # The ownership fix belongs to this RUN and not to a later one: a recursive
 # chown in its own layer rewrites the metadata of every file and duplicates the
@@ -69,7 +70,7 @@ ENV PATH=$VITASDK/bin:$PATH
 RUN set -eu; \
     : "${VITASDK_CHANNEL:?a channel is required}"; \
     cd /tmp; \
-    base_url="https://github.com/vitasdk/vdpm/releases/download/${VDPM_RELEASE}"; \
+    base_url="https://github.com/vitasdk/vdpm/releases/latest/download"; \
     curl -fsSLO "$base_url/bootstrap-vitasdk.sh"; \
     curl -fsSLO "$base_url/SHA256SUMS"; \
     grep ' bootstrap-vitasdk\.sh$' SHA256SUMS | sha256sum -c -; \
