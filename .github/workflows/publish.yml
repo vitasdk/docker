@@ -255,6 +255,7 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
             VITASDK_CHANNEL=${{ matrix.channel }}
+            CHANNEL_MANIFEST_SHA256=${{ matrix.manifest_sha256 }}
           labels: ${{ matrix.label_text }}
           cache-from: type=gha,scope=${{ matrix.id }}
           cache-to: type=gha,mode=max,scope=${{ matrix.id }}
@@ -286,6 +287,7 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}@${{ needs.plan.outputs.base_digest }}
             VITASDK_CHANNEL=${{ matrix.channel }}
+            CHANNEL_MANIFEST_SHA256=${{ matrix.manifest_sha256 }}
           labels: ${{ matrix.label_text }}
           cache-from: type=gha,scope=${{ matrix.id }}
           outputs: type=image,name=${{ matrix.repository }},push-by-digest=true,name-canonical=true,push=true

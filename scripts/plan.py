@@ -165,6 +165,9 @@ def plan(index, manifests, published, base_digest, date, existing,
                 "tags": root_tags,
                 "non_root_tags": non_root_tags,
                 "labels": labels,
+                # A build argument too, so the layer that installs the SDK
+                # is rebuilt when the series moves and not served from cache.
+                "manifest_sha256": identity,
                 # buildx wants `key=value` lines, not a mapping.
                 "label_text": "\n".join(f"{k}={v}" for k, v in sorted(labels.items())),
             })
