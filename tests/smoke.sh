@@ -37,6 +37,24 @@ esac
 printf 'smoke: %s (variant %s%s)\n' "$image" "$variant" \
 	"${run_as:+, as $run_as}"
 
+# The labels say what the image is, and a layer served from the build cache
+# can hold an older SDK than they name: nightly was published that way, with
+# October's toolchain inside and this week's releases on the label.
+label() {
+	docker image inspect --format "{{ index .Config.Labels \"$1\" }}" "$image"
+}
+installed=$(docker run "${run_options[@]}" "$image" vdpm status < /dev/null)
+for pair in "Toolchain org.vitasdk.core.release" "Packages org.vitasdk.packages.release"; do
+	read -r field name <<< "$pair"
+	expected=$(label "$name")
+	actual=$(awk -v field="$field" '$1 == field { print $2 }' <<< "$installed")
+	if [[ -n $expected && $actual != "$expected" ]]; then
+		printf 'smoke: the image is labelled %s=%s but holds %s\n' \
+			"$name" "$expected" "${actual:-nothing}" >&2
+		exit 1
+	fi
+done
+
 # The package half only applies where there are packages. In the minimal image
 # the absence of zlib is the correct outcome, not a failure.
 if [[ $variant == full ]]; then
