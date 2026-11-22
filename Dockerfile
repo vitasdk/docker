@@ -52,6 +52,9 @@ RUN userdel --remove ubuntu 2>/dev/null || true; \
 FROM host-tools AS core
 
 ARG VITASDK_CHANNEL
+# What the series serves right now. The channel name alone never changes, so
+# without this the layer below is cached once and installs that SDK forever.
+ARG CHANNEL_MANIFEST_SHA256
 
 ENV VITASDK=/usr/local/vitasdk
 ENV PATH=$VITASDK/bin:$PATH
@@ -69,6 +72,7 @@ ENV PATH=$VITASDK/bin:$PATH
 # which is what `vdpm install` at runtime needs.
 RUN set -eu; \
     : "${VITASDK_CHANNEL:?a channel is required}"; \
+    : "manifest ${CHANNEL_MANIFEST_SHA256}"; \
     cd /tmp; \
     base_url="https://github.com/vitasdk/vdpm/releases/latest/download"; \
     curl -fsSLO "$base_url/bootstrap-vitasdk.sh"; \
@@ -90,7 +94,6 @@ CMD ["/bin/bash"]
 # The exact content of the image. The dated tag only records when it was
 # published; what it contains is this.
 ARG CHANNEL_SEQUENCE
-ARG CHANNEL_MANIFEST_SHA256
 ARG CORE_RELEASE
 ARG PACKAGES_RELEASE
 ARG BASE_DIGEST
